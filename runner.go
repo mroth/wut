@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os/exec"
 	"sync"
 	"time"
 )
@@ -37,6 +36,7 @@ type Runner struct {
 
 	runlock       sync.Mutex // locked when a command is running
 	runsCompleted uint
+	executor      executor
 	logger        *slog.Logger
 }
 
@@ -68,10 +68,11 @@ var (
 // Similarly, to stop execution of the runner prior to completion or failure, provide a context with a cancellation function.
 func NewRunner(ctx context.Context, name string, arg ...string) *Runner {
 	return &Runner{
-		name:    name,
-		args:    arg,
-		baseCtx: ctx,
-		logger:  slog.New(slog.DiscardHandler),
+		name:     name,
+		args:     arg,
+		baseCtx:  ctx,
+		executor: cmdExecutor{},
+		logger:   slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -87,7 +88,6 @@ func (r *Runner) SetLogger(logger *slog.Logger) {
 
 func (r *Runner) Run() error {
 	r.logger.Info("Starting runner", "command", r.name, "args", r.args)
-
 	for {
 		select {
 		case <-r.baseCtx.Done():
@@ -134,17 +134,7 @@ func (r *Runner) executeCommand() error {
 		r.runsCompleted++
 	}()
 
-	cmd := exec.CommandContext(ctx, r.name, r.args...)
-	cmd.Env = r.CommandOptions.Env
-	cmd.Dir = r.CommandOptions.Dir
-	cmd.Stdin = r.CommandOptions.Stdin
-	cmd.Stdout = r.CommandOptions.Stdout
-	cmd.Stderr = r.CommandOptions.Stderr
-	cmd.WaitDelay = r.CommandOptions.WaitDelay
-	if r.CommandOptions.Cancel != nil {
-		cmd.Cancel = r.CommandOptions.Cancel // not safe to set to nil
-	}
-	return cmd.Run()
+	return r.executor.Run(ctx, r.CommandOptions, r.name, r.args...)
 }
 
 // func (r *Runner) Stop() error

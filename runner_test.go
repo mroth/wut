@@ -3,119 +3,125 @@ package wut
 import (
 	"context"
 	"errors"
-	"flag"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 )
 
-var (
-	testMode         = flag.Bool("testmode", false, "Enable test mode helper binary")
-	testModeSleep    = flag.Duration("testmode-sleep", 0, "Sleep duration for test mode helper binary")
-	testModeOutput   = flag.String("testmode-output", "", "Prints output for test mode helper binary")
-	testModeExitcode = flag.Int("testmode-exitcode", 0, "Exit code for test mode helper binary")
-)
-
-// TestMain provides a test helper that can emulate different command behaviors
-func TestMain(m *testing.M) {
-	flag.Parse()
-	if *testMode {
-		emulateTestBinary()
-		return
-	}
-
-	os.Exit(m.Run())
-}
-
-// emulateTestBinary implements the behavior for our test helper binary
-func emulateTestBinary() {
-	time.Sleep(*testModeSleep) // Simulate some processing time
-	if *testModeOutput != "" {
-		fmt.Println(*testModeOutput)
-	}
-	os.Exit(*testModeExitcode) // Exit with the specified code
-}
-
-type binaryActions struct {
-	sleep    time.Duration
-	output   string
-	exitcode int
-}
-
-func (ba binaryActions) Args() []string {
-	args := []string{"-testmode"}
-	if ba.sleep > 0 {
-		args = append(args, "-testmode-sleep", ba.sleep.String())
-	}
-	if ba.output != "" {
-		args = append(args, "-testmode-output", ba.output)
-	}
-	if ba.exitcode != 0 {
-		args = append(args, "-testmode-exitcode", fmt.Sprintf("%d", ba.exitcode))
-	}
-	return args
+func NewRunnerWithExecutor(ctx context.Context, executor mockExecutor) *Runner {
+	r := NewRunner(ctx, "")
+	r.executor = executor
+	return r
 }
 
 func TestRunner_Run(t *testing.T) {
+	t.Parallel()
+
 	t.Run("simple success", func(t *testing.T) {
 		t.Parallel()
+		r := NewRunnerWithExecutor(t.Context(), mockExecutor{exitcode: 0})
 
-		args := binaryActions{exitcode: 0}.Args()
-		r := NewRunner(t.Context(), os.Args[0], args...)
-
-		err := r.Run()
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
+		runAssert(t, r, runnerExpectedResults{
+			err:  nil,
+			runs: 1,
+		})
 	})
 
 	t.Run("fails when exceeds max runs", func(t *testing.T) {
 		t.Parallel()
 
-		args := binaryActions{exitcode: 1}.Args()
-		r := NewRunner(t.Context(), os.Args[0], args...)
+		r := NewRunnerWithExecutor(t.Context(), mockExecutor{exitcode: 1})
 		r.MaxRuns = 3
 		r.RetryDelay = 10 * time.Millisecond
 
-		err := r.Run()
-		if !errors.Is(err, errMaxRunsCompleted) {
-			t.Errorf("Expected errMaxRunsCompleted, got %v", err)
-		}
-		if r.runsCompleted != 3 {
-			t.Errorf("Expected 3 runs completed, got %d", r.runsCompleted)
-		}
+		runAssert(t, r, runnerExpectedResults{
+			err:          errMaxRunsCompleted,
+			runs:         3,
+			elapsedTotal: 30 * time.Millisecond,
+		})
 	})
 
 	t.Run("context deadline exceeded", func(t *testing.T) {
 		t.Parallel()
 
-		// cancel context after 50ms
+		// set overall runner context timeout for 50ms,
+		// and have runner run a failing command every ~10ms via retry delay.
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 		t.Cleanup(cancel)
-
-		// run a failing command every ~10ms
-		args := binaryActions{exitcode: 1}.Args()
-		r := NewRunner(ctx, os.Args[0], args...)
+		r := NewRunnerWithExecutor(ctx, mockExecutor{exitcode: 1})
 		r.RetryDelay = 10 * time.Millisecond
 
-		start := time.Now()
-		err := r.Run()
-		elapsed := time.Since(start)
-		t.Log("Elapsed time:", elapsed)
-		t.Log("Runs completed:", r.runsCompleted)
-
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("Expected context.DeadlineExceed, got %v", err)
-		}
-
-		if elapsed < 50*time.Millisecond {
-			t.Errorf("Expected at least 50ms elapsed, got %v", elapsed)
-		}
-
-		if r.runsCompleted < 4 {
-			t.Errorf("Expected at least 4 runs completed, got %d", r.runsCompleted)
-		}
+		runAssert(t, r, runnerExpectedResults{
+			err:          context.DeadlineExceeded,
+			runs:         5,
+			elapsedTotal: 50 * time.Millisecond,
+		})
 	})
 
+	t.Run("process timeout", func(t *testing.T) {
+		t.Parallel()
+
+		// Run a command that sleeps for 100ms before success, but with a process timeout of 50ms.
+		//
+		// We should see MaxRuns failures occur over a total ~150ms, as each process is canceled
+		// due to a deadline exceeded error before it completes.
+		var (
+			executorSleepDuration = 100 * time.Millisecond
+			runnerProcessTimeout  = 50 * time.Millisecond
+			runnerMaxRuns         = 3
+			wantErr               = errMaxRunsCompleted
+			wantRunsCompleted     = uint(3)
+			wantTotalElapsed      = time.Duration(runnerMaxRuns) * runnerProcessTimeout
+		)
+
+		r := NewRunnerWithExecutor(t.Context(), mockExecutor{sleep: executorSleepDuration})
+		r.ProcessTimeout = runnerProcessTimeout
+		r.MaxRuns = uint(runnerMaxRuns)
+
+		runAssert(t, r, runnerExpectedResults{
+			err:          wantErr,
+			runs:         wantRunsCompleted,
+			elapsedTotal: wantTotalElapsed,
+		})
+	})
+}
+
+// runAssert runs the given runner and asserts that it completes with the expected results.
+func runAssert(t *testing.T, r *Runner, want runnerExpectedResults) {
+	t.Helper()
+
+	start := time.Now()
+	err := r.Run()
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, want.err) {
+		t.Errorf("error: got %v, want %v", err, want.err)
+	}
+
+	if r.runsCompleted != want.runs {
+		t.Errorf("runs completed: got %d, want %d", r.runsCompleted, want.runs)
+	}
+
+	assertDurationElapsed(t, elapsed, want.elapsedTotal)
+}
+
+type runnerExpectedResults struct {
+	err          error
+	runs         uint
+	elapsedTotal time.Duration
+}
+
+// "Rough" duration elapsed equality, allowing for a small margin of error.
+//
+// We do this by making sure that the elapsed time is greater than or equal to
+// the expected duration, and that the difference between the elapsed and
+// the expected duration is within a small margin of reasonable runtime overhead.
+//
+// This will no longer be necessary once using synctest bubbles in go1.25.
+func assertDurationElapsed(t *testing.T, got, want time.Duration) {
+	t.Helper()
+
+	overhead := 10 * time.Millisecond
+	if got < want || got > want+overhead {
+		t.Errorf("Expected duration ~>=%v, got %v", want, got)
+	}
 }
