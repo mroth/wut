@@ -1,0 +1,5 @@
+# This test runs /usr/bin/true via wut and expects a success.
+exec wut -timeout=5s bintrue
+# The stderr should indicate that the command completed successfully on the first try.
+stderr 'Completed successfully'
+stderr 'attempts=1'

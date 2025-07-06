@@ -1,0 +1,7 @@
+# This test runs a script that fails a number of times before succeeding.
+exec wut -retry-delay=0.25s succeed-after -fails=3 -file=attempts.dat
+# The script should succeed after 4 attempts, so its data file should contain '4'.
+grep '4' attempts.dat
+# The stderr should indicate that the command completed successfully after 3 retries.
+stderr 'Completed successfully'
+stderr 'attempts=4'

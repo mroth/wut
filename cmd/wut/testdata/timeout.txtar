@@ -1,0 +1,6 @@
+# This test runs /usr/bin/false via wut and expects a timeout failure after the allotted time.
+! exec wut -timeout=5s binfalse
+
+# The logs should show the command was attempted and failed over the timeout period with numerous retries.
+stderr -count=5 'exit status 1'
+stderr 'timeout exceeded'
