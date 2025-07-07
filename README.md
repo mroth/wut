@@ -45,8 +45,7 @@ Critically, this also does not require access to a shell, handy for running in m
 
 ## Installation
 
-<!-- Uncomment once binary releases are enabled. -->
-<!-- Download a binary from the [releases page][1] and place somewhere on your path. -->
+Download a binary from the [releases page][1] and place somewhere on your path.
 
 If you have a Go toolchain installed, you can get the latest via:
 
