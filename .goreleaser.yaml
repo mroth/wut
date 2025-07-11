@@ -26,6 +26,10 @@ gomod:
   # Notice: for this to work your `build.main` must be a package, not a `.go` file.
   proxy: true
 
+# config the checksum filename to be predictable
+checksum:
+  name_template: "checksums.txt"
+
 archives:
   - formats: [tar.gz]
     format_overrides:
