@@ -86,6 +86,7 @@ func (r *Runner) SetLogger(logger *slog.Logger) {
 	}
 }
 
+// Run starts the Runner and executes the command repeatedly until it succeeds or a stop condition is reached.
 func (r *Runner) Run() error {
 	r.logger.Info("Starting runner", "command", r.name, "args", r.args)
 	for {
