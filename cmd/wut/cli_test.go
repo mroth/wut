@@ -47,7 +47,7 @@ func succeedAfterAttempts() {
 		fmt.Sscanf(string(data), "%d", &val)
 	}
 	val++
-	os.WriteFile(*filename, []byte(fmt.Sprint(val)), 0644)
+	os.WriteFile(*filename, fmt.Append(nil, val), 0644)
 	if val <= *fails {
 		os.Exit(val)
 	}
